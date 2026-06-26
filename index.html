@@ -95,12 +95,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .bal-row{display:flex;justify-content:space-between;padding:4px 0;font-size:13px;border-bottom:1px solid #f5f3ee}
 .bal-row:last-child{border-bottom:none;font-weight:500;padding-top:6px}
 .bal-pos{color:#2e7d32;font-weight:500}.bal-neg{color:#c62828;font-weight:500}
-.pack-section{margin-bottom:1.5rem}
-.pack-title{font-size:11px;font-weight:500;color:#aaa;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px}
-.pack-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:6px}
-.pack-item{display:flex;align-items:center;gap:8px;padding:7px 10px;background:#fff;border:1px solid #e5e3dc;border-radius:8px;font-size:13px;cursor:pointer;user-select:none}
-.pack-item.checked{color:#bbb;text-decoration:line-through;background:#fafaf8}
-.pack-item input[type=checkbox]{accent-color:#2d7a3a;width:14px;height:14px;flex-shrink:0}
 .loading{text-align:center;color:#aaa;padding:2rem;font-size:13px}
 </style>
 </head>
@@ -111,7 +105,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   <div class="tabs">
     <button class="tab active" onclick="showTab('itinerary',event)">Itinerary</button>
     <button class="tab" onclick="showTab('expenses',event)">Expenses</button>
-
   </div>
 
   <div id="itinerary" class="panel active">
@@ -159,8 +152,6 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
     </div>
     <div class="balance-bar" id="balance-bar"></div>
   </div>
-
-
 </div>
 
 <!-- PIN modal -->
@@ -210,14 +201,29 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
   </div>
 </div>
 
-<script>
+<!-- Firebase -->
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
+import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
+
+var firebaseConfig = {
+  apiKey: "AIzaSyAgmRqWqQr1OLpe-Auqq1AQYMz_Ch1oL4A",
+  authDomain: "ningxia-2026.firebaseapp.com",
+  databaseURL: "https://ningxia-2026-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "ningxia-2026",
+  storageBucket: "ningxia-2026.firebasestorage.app",
+  messagingSenderId: "365926140776",
+  appId: "1:365926140776:web:4bc19750951d6e6d70a4dd"
+};
+
+var app = initializeApp(firebaseConfig);
+var db = getDatabase(app);
+
 var SLOT_H = 28, DAY_START = 8, DAY_END = 23, PIN = '0102';
 var editMode = false, pinBuffer = '', editingDay = null, editingIdx = null;
 var expenses = [];
 var expanded = {1:true, 2:false, 3:false};
-var packChecked = {};
-var ITIN_KEY = 'nx_itinerary', EXP_KEY = 'nx_expenses', PACK_KEY = 'nx_packing_local';
-var syncTimer = null;
+var itinerary = {};
 
 var DEFAULT_ITIN = {
   1:{date:"16 Jul",dow:"Thursday",day:"Day 1",hotel:{name:"JW Marriott Yinchuan",status:"proposed"},acts:[
@@ -245,62 +251,38 @@ var DEFAULT_ITIN = {
   ]}
 };
 
-var itinerary = JSON.parse(JSON.stringify(DEFAULT_ITIN));
-
-
-
-// ── STORAGE ──
-function setSyncStatus(elId, msg, cls) {
-  var el = document.getElementById(elId);
-  if (el) { el.textContent = msg; el.className = 'sync-bar ' + (cls||''); }
-}
-
-function saveShared(key, data, syncElId) {
+// ── FIREBASE ──
+function fbSave(path, data, syncElId) {
   setSyncStatus(syncElId, 'Saving…', '');
-  window.storage.set(key, JSON.stringify(data), true).then(function(r) {
-    if (r) setSyncStatus(syncElId, '✓ Saved & synced', 'sync-ok');
-    else setSyncStatus(syncElId, '⚠ Save failed', 'sync-err');
+  set(ref(db, path), data).then(function() {
+    setSyncStatus(syncElId, '✓ Saved & synced', 'sync-ok');
     setTimeout(function(){ setSyncStatus(syncElId, '', ''); }, 3000);
-  }).catch(function() {
+  }).catch(function(e) {
     setSyncStatus(syncElId, '⚠ Save failed', 'sync-err');
     setTimeout(function(){ setSyncStatus(syncElId, '', ''); }, 3000);
   });
 }
 
-function loadShared(key, fallback, cb) {
-  window.storage.get(key, true).then(function(r) {
-    cb(r ? JSON.parse(r.value) : fallback);
-  }).catch(function() { cb(fallback); });
+function setSyncStatus(elId, msg, cls) {
+  var el = document.getElementById(elId);
+  if (el) { el.textContent = msg; el.className = 'sync-bar ' + (cls||''); }
 }
 
-function saveLocal(key, data) {
-  try { localStorage.setItem(key, JSON.stringify(data)); } catch(e) {}
-}
+// ── INIT ──
+// Listen for itinerary changes in real time
+onValue(ref(db, 'itinerary'), function(snapshot) {
+  var data = snapshot.val();
+  if (data) itinerary = data;
+  else { itinerary = JSON.parse(JSON.stringify(DEFAULT_ITIN)); fbSave('itinerary', itinerary, 'itin-sync'); }
+  renderItinerary();
+});
 
-function loadLocal(key, fallback) {
-  try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : fallback; } catch(e) { return fallback; }
-}
-
-function init() {
-  loadShared(ITIN_KEY, null, function(data) {
-    if (data) itinerary = data;
-    else itinerary = JSON.parse(JSON.stringify(DEFAULT_ITIN));
-    renderItinerary();
-  });
-  loadShared(EXP_KEY, [], function(data) {
-    expenses = data || [];
-    renderExpenses();
-  });
-
-  setInterval(function() {
-    loadShared(ITIN_KEY, null, function(data) {
-      if (!editMode && data) { itinerary = data; renderItinerary(); }
-    });
-    loadShared(EXP_KEY, [], function(data) {
-      expenses = data || []; renderExpenses();
-    });
-  }, 15000);
-}
+// Listen for expense changes in real time
+onValue(ref(db, 'expenses'), function(snapshot) {
+  var data = snapshot.val();
+  expenses = data ? (Array.isArray(data) ? data : Object.values(data)) : [];
+  renderExpenses();
+});
 
 // ── SLOTS ──
 function pad(n) { return String(n).padStart(2,'0'); }
@@ -310,12 +292,10 @@ function genSlots() {
   return s;
 }
 var SLOTS = genSlots();
-
 function timeToIdx(t) {
   if (!t) return -1;
   var p = t.split(':'); return (parseInt(p[0],10)-DAY_START)*2+(parseInt(p[1],10)>=30?1:0);
 }
-
 function buildTimeSelect(selId, val) {
   var sel = document.getElementById(selId); sel.innerHTML = '';
   for (var h = DAY_START; h <= DAY_END; h++) {
@@ -332,23 +312,23 @@ function buildTimeSelect(selId, val) {
 }
 
 // ── TABS ──
-function showTab(t, e) {
+window.showTab = function(t, e) {
   var tabs = document.querySelectorAll('.tab');
   for (var i=0;i<tabs.length;i++) tabs[i].classList.remove('active');
   var panels = document.querySelectorAll('.panel');
   for (var i=0;i<panels.length;i++) panels[i].classList.remove('active');
   e.target.classList.add('active');
   document.getElementById(t).classList.add('active');
-}
+};
 
 // ── PIN ──
-function toggleEditMode() {
+window.toggleEditMode = function() {
   if (editMode) { exitEdit(); return; }
   pinBuffer = ''; updatePinDots();
   document.getElementById('pin-err').textContent = '';
   document.getElementById('pin-modal').classList.add('show');
-}
-function pinKey(k) {
+};
+window.pinKey = function(k) {
   if (k==='back') { pinBuffer=pinBuffer.slice(0,-1); updatePinDots(); return; }
   if (pinBuffer.length>=4) return;
   pinBuffer+=k; updatePinDots();
@@ -364,11 +344,11 @@ function pinKey(k) {
       pinBuffer=''; updatePinDots();
     }
   }
-}
+};
 function updatePinDots() {
   for (var i=0;i<4;i++) document.getElementById('pd'+i).classList.toggle('filled',i<pinBuffer.length);
 }
-function closePinModal() { document.getElementById('pin-modal').classList.remove('show'); }
+window.closePinModal = function() { document.getElementById('pin-modal').classList.remove('show'); };
 function exitEdit() {
   editMode=false;
   var btn=document.getElementById('edit-toggle');
@@ -377,7 +357,7 @@ function exitEdit() {
 }
 
 // ── ITINERARY ──
-function toggleDay(d) { expanded[d]=!expanded[d]; renderItinerary(); }
+window.toggleDay = function(d) { expanded[d]=!expanded[d]; renderItinerary(); };
 
 function renderDay(d) {
   var data=itinerary[d], acts=data.acts, isOpen=expanded[d];
@@ -425,12 +405,13 @@ function renderDay(d) {
 
 function renderItinerary() {
   var html='', days=Object.keys(itinerary);
+  if (!days.length) { document.getElementById('days-container').innerHTML='<div class="loading">Loading itinerary…</div>'; return; }
   for (var i=0;i<days.length;i++) html+=renderDay(Number(days[i]));
   document.getElementById('days-container').innerHTML=html;
 }
 
 // ── ACT MODAL ──
-function openEditAct(d,idx) {
+window.openEditAct = function(d,idx) {
   editingDay=d; editingIdx=idx;
   var act=itinerary[d].acts[idx];
   document.getElementById('act-modal-title').textContent='Edit activity';
@@ -443,8 +424,8 @@ function openEditAct(d,idx) {
   document.getElementById('m-notes').value=act.notes||'';
   document.getElementById('m-del-btn').style.display='';
   document.getElementById('act-modal').classList.add('show');
-}
-function openAddAct(d) {
+};
+window.openAddAct = function(d) {
   editingDay=d; editingIdx=null;
   document.getElementById('act-modal-title').textContent='Add activity';
   buildTimeSelect('m-start','09:00'); buildTimeSelect('m-end','10:00');
@@ -453,8 +434,8 @@ function openAddAct(d) {
   document.getElementById('m-notes').value='';
   document.getElementById('m-del-btn').style.display='none';
   document.getElementById('act-modal').classList.add('show');
-}
-function openEditHotel(d) {
+};
+window.openEditHotel = function(d) {
   editingDay=d; editingIdx='hotel';
   var h=itinerary[d].hotel;
   document.getElementById('act-modal-title').textContent='Edit hotel';
@@ -466,8 +447,8 @@ function openEditHotel(d) {
   document.getElementById('m-notes').value='';
   document.getElementById('m-del-btn').style.display='none';
   document.getElementById('act-modal').classList.add('show');
-}
-function saveAct() {
+};
+window.saveAct = function() {
   var d=editingDay;
   if (editingIdx==='hotel') {
     var n=document.getElementById('m-name').value.trim();
@@ -483,23 +464,23 @@ function saveAct() {
     else itinerary[d].acts[editingIdx]=obj;
     itinerary[d].acts.sort(function(a,b){return timeToIdx(a.start)-timeToIdx(b.start);});
   }
-  closeActModal(); renderItinerary();
-  saveShared(ITIN_KEY, itinerary, 'itin-sync');
-}
-function deleteAct() {
+  closeActModal();
+  fbSave('itinerary', itinerary, 'itin-sync');
+};
+window.deleteAct = function() {
   if (editingIdx===null||editingIdx==='hotel') return;
   itinerary[editingDay].acts.splice(editingIdx,1);
-  closeActModal(); renderItinerary();
-  saveShared(ITIN_KEY, itinerary, 'itin-sync');
-}
-function closeActModal() { document.getElementById('act-modal').classList.remove('show'); }
+  closeActModal();
+  fbSave('itinerary', itinerary, 'itin-sync');
+};
+window.closeActModal = function() { document.getElementById('act-modal').classList.remove('show'); };
 
 // ── EXPENSES ──
-function updateCurLabel() {
+window.updateCurLabel = function() {
   var cur=document.getElementById('e-cur').value;
   document.getElementById('amt-label').textContent='Amount ('+(cur==='HKD'?'HK$':'¥')+')';
-}
-function addExpense() {
+};
+window.addExpense = function() {
   var desc=document.getElementById('e-desc').value.trim();
   var amt=parseFloat(document.getElementById('e-amt').value);
   if (!desc||isNaN(amt)) { alert('Please enter a description and amount.'); return; }
@@ -507,13 +488,13 @@ function addExpense() {
     who:document.getElementById('e-who').value,cat:document.getElementById('e-cat').value,
     day:document.getElementById('e-day').value});
   document.getElementById('e-desc').value=''; document.getElementById('e-amt').value='';
-  renderExpenses();
-  saveShared(EXP_KEY, expenses, 'exp-sync');
-}
-function delExp(i) {
-  expenses.splice(i,1); renderExpenses();
-  saveShared(EXP_KEY, expenses, 'exp-sync');
-}
+  fbSave('expenses', expenses, 'exp-sync');
+};
+window.delExp = function(i) {
+  expenses.splice(i,1);
+  fbSave('expenses', expenses, 'exp-sync');
+};
+
 function renderExpenses() {
   var rows=document.getElementById('exp-rows');
   if (!expenses.length) {
@@ -568,29 +549,6 @@ function renderExpenses() {
     '<div style="font-size:11px;color:#aaa;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px">Settlement</div>'+
     (sh||'<div style="color:#bbb;font-size:13px;text-align:center;padding:8px 0">No expenses yet</div>');
 }
-
-// ── PACKING (local only) ──
-function renderPacking() {
-  var cats=Object.keys(PACKING), html='';
-  for (var ci=0;ci<cats.length;ci++) {
-    var cat=cats[ci], items=PACKING[cat];
-    html+='<div class="pack-section"><div class="pack-title">'+cat+'</div><div class="pack-grid">';
-    for (var ii=0;ii<items.length;ii++) {
-      var id='pk'+ci+'_'+ii, checked=packChecked[id]||false;
-      html+='<label class="pack-item'+(checked?' checked':'')+'" id="lbl'+id+'">'+
-        '<input type="checkbox"'+(checked?' checked':'')+' onchange="togglePack(\''+id+'\',this.checked)">'+items[ii]+'</label>';
-    }
-    html+='</div></div>';
-  }
-  document.getElementById('pack-container').innerHTML=html;
-}
-function togglePack(id, checked) {
-  packChecked[id]=checked;
-  document.getElementById('lbl'+id).classList.toggle('checked',checked);
-  saveLocal(PACK_KEY, packChecked);
-}
-
-init();
 </script>
 </body>
 </html>
