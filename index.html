@@ -290,6 +290,7 @@ function loadLocal(key, fallback) {
 function init() {
   loadShared(ITIN_KEY, null, function(data) {
     if (data) itinerary = data;
+    else itinerary = JSON.parse(JSON.stringify(DEFAULT_ITIN));
     renderItinerary();
   });
   loadShared(EXP_KEY, [], function(data) {
